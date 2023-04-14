@@ -2,6 +2,7 @@
 ![GitHub language count](https://img.shields.io/github/languages/count/josecastillolema/krkn-operator)
 ![GitHub top language](https://img.shields.io/github/languages/top/josecastillolema/krkn-operator)
 [![Go Report Card](https://goreportcard.com/badge/github.com/josecastillolema/krkn-operator)](https://goreportcard.com/report/github.com/josecastillolema/krkn-operator)
+[![Docker Image CI](https://github.com/josecastillolema/krkn-operator/actions/workflows/docker-image.yml/badge.svg)](https://github.com/josecastillolema/krkn-operator/actions/workflows/docker-image.yml)
 
 # krkn-operator
 The krkn-operator provides a way to run [krkn](https://github.com/redhat-chaos/krkn) chaos test scenarios in various [predefined deployment configurations](https://github.com/redhat-chaos/krkn-hub).
