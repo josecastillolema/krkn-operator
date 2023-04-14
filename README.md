@@ -46,7 +46,7 @@ NAME                                               READY   STATUS    RESTARTS   
 krkn-operator-controller-manager-b8585c7cb-88xjh   2/2     Running   0          18m
 ```
 
-3. Install Instances of Custom Resources:
+3. Install instances of Custom Resources:
 
 ```sh
 kubectl apply -f config/samples/
