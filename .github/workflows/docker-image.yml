@@ -1,0 +1,25 @@
+name: Docker Image CI
+
+on:
+  push:
+    branches: [ "main" ]
+    paths-ignore:
+    - '**.md'
+  pull_request:
+    branches: [ "main" ]
+    paths-ignore:
+    - '**.md'
+
+jobs:
+
+  build:
+
+    runs-on: ubuntu-latest
+    - uses: actions/checkout@v3
+    - name: Login in Quay
+      run: docker login quay.io -u ${QUAY_USER} -p ${QUAY_TOKEN}
+      env:
+        QUAY_USER: ${{ secrets.QUAY_USER }}
+        QUAY_TOKEN: ${{ secrets.QUAY_TOKEN }}
+    - name: Build and push the Docker image
+      run: make docker-build docker-push
