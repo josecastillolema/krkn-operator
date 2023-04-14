@@ -40,7 +40,7 @@ make deploy IMG=quay.io/jcastillolema/krkn-operator:0.0.1
 
 2. Verify that the krkn-operator is up and running:
 ```
-$ k get po -n krkn-operator-system
+$ kubectl get po -n krkn-operator-system
 NAME                                               READY   STATUS    RESTARTS   AGE
 krkn-operator-controller-manager-b8585c7cb-88xjh   2/2     Running   0          18m
 ```
@@ -50,14 +50,6 @@ krkn-operator-controller-manager-b8585c7cb-88xjh   2/2     Running   0          
 ```sh
 kubectl apply -f config/samples/
 ```
-
-2. Build and push your image to the location specified by `IMG`:
-
-```sh
-make docker-build docker-push IMG=quay.io/jcastillolema/krkn-operator:0.0.1
-```
-
-
 
 ### Uninstall CRDs
 To delete the CRDs from the cluster:
