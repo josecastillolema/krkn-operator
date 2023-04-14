@@ -1,0 +1,12 @@
+apiVersion: perf.chaos.io/v1
+kind: Benchmark
+metadata:
+  labels:
+    app.kubernetes.io/name: benchmark
+    app.kubernetes.io/instance: benchmark-sample
+    app.kubernetes.io/part-of: krkn-operator
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/created-by: krkn-operator
+  name: benchmark-sample
+spec:
+  # TODO(user): Add fields here
