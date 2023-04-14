@@ -1,8 +1,30 @@
-# krkn-operator
-// TODO(user): Add simple overview of use/purpose
+![GitHub](https://img.shields.io/github/license/josecastillolema/krkn-operator)
+![GitHub language count](https://img.shields.io/github/languages/count/josecastillolema/krkn-operator)
+![GitHub top language](https://img.shields.io/github/languages/top/josecastillolema/krkn-operator)
+[![Go Report Card](https://goreportcard.com/badge/github.com/josecastillolema/krkn-operator)](https://goreportcard.com/report/github.com/josecastillolema/krkn-operator)
 
-## Description
-// TODO(user): An in-depth paragraph about your project and overview of use
+# krkn-operator
+The krkn-operator provides a way to run [krkn](https://github.com/redhat-chaos/krkn) chaos test scenarios in various [predefined deployment configurations](https://github.com/redhat-chaos/krkn-hub).
+
+## Use
+Create a benchmark CRD, i.e.:
+```yaml
+apiVersion: perf.chaos.io/v1
+kind: Benchmark
+metadata:
+  name: benchmark-sample
+spec:
+  scenario: pod-scenarios
+```
+
+```
+$ kubectl apply -f config/samples/perf_v1_benchmark.yaml
+benchmark.perf.chaos.io/benchmark-sample created
+
+$ kubectl get benchmark
+NAME               AGE
+benchmark-sample   7s
+```
 
 ## Getting Started
 You’ll need a Kubernetes cluster to run against. You can use [KIND](https://sigs.k8s.io/kind) to get a local cluster for testing, or run against a remote cluster.
@@ -18,13 +40,13 @@ kubectl apply -f config/samples/
 2. Build and push your image to the location specified by `IMG`:
 
 ```sh
-make docker-build docker-push IMG=<some-registry>/krkn-operator:tag
+make docker-build docker-push IMG=quay.io/jcastillolema/krkn-operator:0.0.1
 ```
 
 3. Deploy the controller to the cluster with the image specified by `IMG`:
 
 ```sh
-make deploy IMG=<some-registry>/krkn-operator:tag
+make deploy IMG=quay.io/jcastillolema/krkn-operator:0.0.1
 ```
 
 ### Uninstall CRDs
@@ -42,7 +64,7 @@ make undeploy
 ```
 
 ## Contributing
-// TODO(user): Add detailed information on how you would like others to contribute to this project
+
 
 ### How it works
 This project aims to follow the Kubernetes [Operator pattern](https://kubernetes.io/docs/concepts/extend-kubernetes/operator/).
@@ -75,20 +97,4 @@ make manifests
 **NOTE:** Run `make --help` for more information on all potential `make` targets
 
 More information can be found via the [Kubebuilder Documentation](https://book.kubebuilder.io/introduction.html)
-
-## License
-
-Copyright 2023.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
 

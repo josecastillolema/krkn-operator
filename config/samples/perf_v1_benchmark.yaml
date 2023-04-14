@@ -9,4 +9,4 @@ metadata:
     app.kubernetes.io/created-by: krkn-operator
   name: benchmark-sample
 spec:
-  # TODO(user): Add fields here
+  scenario: pod-scenarios
