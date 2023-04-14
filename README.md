@@ -32,7 +32,20 @@ You’ll need a Kubernetes cluster to run against. You can use [kind](https://si
 **Note:** Your controller will automatically use the current context in your kubeconfig file (i.e. whatever cluster `kubectl cluster-info` shows).
 
 ### Running on the cluster
-1. Install Instances of Custom Resources:
+1. Deploy the controller to the cluster:
+
+```sh
+make deploy IMG=quay.io/jcastillolema/krkn-operator:0.0.1
+```
+
+2. Verify that the krkn-operator is up and running:
+```
+$ k get po -n krkn-operator-system
+NAME                                               READY   STATUS    RESTARTS   AGE
+krkn-operator-controller-manager-b8585c7cb-88xjh   2/2     Running   0          18m
+```
+
+3. Install Instances of Custom Resources:
 
 ```sh
 kubectl apply -f config/samples/
@@ -44,11 +57,7 @@ kubectl apply -f config/samples/
 make docker-build docker-push IMG=quay.io/jcastillolema/krkn-operator:0.0.1
 ```
 
-3. Deploy the controller to the cluster with the image specified by `IMG`:
 
-```sh
-make deploy IMG=quay.io/jcastillolema/krkn-operator:0.0.1
-```
 
 ### Uninstall CRDs
 To delete the CRDs from the cluster:
