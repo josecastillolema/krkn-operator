@@ -8,7 +8,7 @@
 The krkn-operator provides a way to run [krkn](https://github.com/redhat-chaos/krkn) chaos test scenarios in various [predefined deployment configurations](https://github.com/redhat-chaos/krkn-hub).
 
 ## Use
-Create a benchmark CRD, i.e.:
+Create a benchmark CRD, choosing one of the predefined scenarios of [krkn-hub](https://github.com/redhat-chaos/krkn-hub), i.e.:
 ```yaml
 apiVersion: perf.chaos.io/v1
 kind: Benchmark
