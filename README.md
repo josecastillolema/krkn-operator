@@ -60,7 +60,7 @@ make uninstall
 ```
 
 ### Undeploy controller
-UnDeploy the controller from the cluster:
+Undeploy the controller from the cluster:
 
 ```sh
 make undeploy
