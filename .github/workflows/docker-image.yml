@@ -15,6 +15,8 @@ jobs:
   build:
 
     runs-on: ubuntu-latest
+    
+    steps:
     - uses: actions/checkout@v3
     - name: Login in Quay
       run: docker login quay.io -u ${QUAY_USER} -p ${QUAY_TOKEN}
