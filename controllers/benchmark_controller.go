@@ -18,22 +18,46 @@ package controllers
 
 import (
 	"context"
+	"fmt"
+	"strings"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
-
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	perfv1 "github.com/josecastillolema/krkn-operator/api/v1"
 )
 
+const benchmarkFinalizer = "perf.chaos.io/finalizer"
+
+// Definitions to manage status conditions
+const (
+	// typeAvailableBenchmark represents the status of the Deployment reconciliation
+	typeAvailableBenchmark = "Available"
+	// typeDegradedBenchmark represents the status used when the custom resource is deleted and the finalizer operations are must to occur.
+	typeDegradedBenchmark = "Degraded"
+)
+
 // BenchmarkReconciler reconciles a Benchmark object
 type BenchmarkReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme   *runtime.Scheme
+	Recorder record.EventRecorder
 }
+
+// The following markers are used to generate the rules permissions (RBAC) on config/rbac using controller-gen
+// when the command <make manifests> is executed.
+// To know more about markers see: https://book.kubebuilder.io/reference/markers.html
 
 //+kubebuilder:rbac:groups=perf.chaos.io,resources=benchmarks,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=perf.chaos.io,resources=benchmarks/status,verbs=get;update;patch
@@ -44,20 +68,315 @@ type BenchmarkReconciler struct {
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
-// TODO(user): Modify the Reconcile function to compare the state specified by
-// the Benchmark object against the actual cluster state, and then
-// perform operations to make the cluster state reflect the state specified by
-// the user.
-//
-// For more details, check Reconcile and its Result here:
+
+// It is essential for the controller's reconciliation loop to be idempotent. By following the Operator
+// pattern you will create Controllers which provide a reconcile function
+// responsible for synchronizing resources until the desired state is reached on the cluster.
+// Breaking this recommendation goes against the design principles of controller-runtime.
+// and may lead to unforeseen consequences such as resources becoming stuck and requiring manual intervention.
+// For further info:
+// - About Operator Pattern: https://kubernetes.io/docs/concepts/extend-kubernetes/operator/
+// - About Controllers: https://kubernetes.io/docs/concepts/architecture/controller/
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.14.1/pkg/reconcile
 func (r *BenchmarkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	_ = log.FromContext(ctx)
+	log := log.FromContext(ctx)
 
-	// TODO(user): your logic here
+	// Fetch the Benchmark instance
+	// The purpose is check if the Custom Resource for the Benchmark kind
+	// is applied on the cluster if not we return nil to stop the reconciliation
 	benchmark := &perfv1.Benchmark{}
 	err := r.Get(ctx, req.NamespacedName, benchmark)
-	return ctrl.Result{}, err
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			// If the custom resource is not found then, it usually means that it was deleted or not created
+			// In this way, we will stop the reconciliation
+			log.Info("Baseline resource not found. Ignoring since object must be deleted")
+			return ctrl.Result{}, nil
+		}
+		// Error reading the object - requeue the request.
+		log.Error(err, "Failed to get Benchmark")
+		return ctrl.Result{}, err
+	}
+
+	// Let's just set the status as Unknown when no status are available
+	if benchmark.Status.Conditions == nil || len(benchmark.Status.Conditions) == 0 {
+		meta.SetStatusCondition(&benchmark.Status.Conditions, metav1.Condition{Type: typeAvailableBenchmark, Status: metav1.ConditionUnknown, Reason: "Reconciling", Message: "Starting reconciliation"})
+		if err = r.Status().Update(ctx, benchmark); err != nil {
+			log.Error(err, "Failed to update Benchmark status")
+			return ctrl.Result{}, err
+		}
+
+		// Let's re-fetch the bechmark Custom Resource after update the status
+		// so that we have the latest state of the resource on the cluster and we will avoid
+		// raise the issue "the object has been modified, please apply
+		// your changes to the latest version and try again" which would re-trigger the reconciliation
+		// if we try to update it again in the following operations
+		if err := r.Get(ctx, req.NamespacedName, benchmark); err != nil {
+			log.Error(err, "Failed to re-fetch benchmark")
+			return ctrl.Result{}, err
+		}
+	}
+
+	// Let's add a finalizer. Then, we can define some operations which should
+	// occurs before the custom resource to be deleted.
+	// More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/finalizers
+	if !controllerutil.ContainsFinalizer(benchmark, benchmarkFinalizer) {
+		log.Info("Adding Finalizer for Benchmark")
+		if ok := controllerutil.AddFinalizer(benchmark, benchmarkFinalizer); !ok {
+			log.Error(err, "Failed to add finalizer into the custom resource")
+			return ctrl.Result{Requeue: true}, nil
+		}
+
+		if err = r.Update(ctx, benchmark); err != nil {
+			log.Error(err, "Failed to update custom resource to add finalizer")
+			return ctrl.Result{}, err
+		}
+	}
+
+	// Check if the Benchmark instance is marked to be deleted, which is
+	// indicated by the deletion timestamp being set.
+	isBenchmarkMarkedToBeDeleted := benchmark.GetDeletionTimestamp() != nil
+	if isBenchmarkMarkedToBeDeleted {
+		if controllerutil.ContainsFinalizer(benchmark, benchmarkFinalizer) {
+			log.Info("Performing Finalizer Operations for Benchmark before delete CR")
+
+			// Let's add here an status "Downgrade" to define that this resource begin its process to be terminated.
+			meta.SetStatusCondition(&benchmark.Status.Conditions, metav1.Condition{Type: typeDegradedBenchmark,
+				Status: metav1.ConditionUnknown, Reason: "Finalizing",
+				Message: fmt.Sprintf("Performing finalizer operations for the custom resource: %s ", benchmark.Name)})
+
+			if err := r.Status().Update(ctx, benchmark); err != nil {
+				log.Error(err, "Failed to update Benchmark status")
+				return ctrl.Result{}, err
+			}
+
+			// Perform all operations required before remove the finalizer and allow
+			// the Kubernetes API to remove the custom resource.
+			r.doFinalizerOperationsForBenchmark(benchmark)
+
+			// TODO(user): If you add operations to the doFinalizerOperationsForBenchmark method
+			// then you need to ensure that all worked fine before deleting and updating the Downgrade status
+			// otherwise, you should requeue here.
+
+			// Re-fetch the benchmark Custom Resource before update the status
+			// so that we have the latest state of the resource on the cluster and we will avoid
+			// raise the issue "the object has been modified, please apply
+			// your changes to the latest version and try again" which would re-trigger the reconciliation
+			if err := r.Get(ctx, req.NamespacedName, benchmark); err != nil {
+				log.Error(err, "Failed to re-fetch benchmark")
+				return ctrl.Result{}, err
+			}
+
+			meta.SetStatusCondition(&benchmark.Status.Conditions, metav1.Condition{Type: typeDegradedBenchmark,
+				Status: metav1.ConditionTrue, Reason: "Finalizing",
+				Message: fmt.Sprintf("Finalizer operations for custom resource %s name were successfully accomplished", benchmark.Name)})
+
+			if err := r.Status().Update(ctx, benchmark); err != nil {
+				log.Error(err, "Failed to update Benchmark status")
+				return ctrl.Result{}, err
+			}
+
+			log.Info("Removing Finalizer for Benchmark after successfully perform the operations")
+			if ok := controllerutil.RemoveFinalizer(benchmark, benchmarkFinalizer); !ok {
+				log.Error(err, "Failed to remove finalizer for Benchmark")
+				return ctrl.Result{Requeue: true}, nil
+			}
+
+			if err := r.Update(ctx, benchmark); err != nil {
+				log.Error(err, "Failed to remove finalizer for Benchmark")
+				return ctrl.Result{}, err
+			}
+		}
+		return ctrl.Result{}, nil
+	}
+
+	// Check if the deployment already exists, if not create a new one
+	found := &appsv1.Deployment{}
+	err = r.Get(ctx, types.NamespacedName{Name: benchmark.Name, Namespace: benchmark.Namespace}, found)
+	if err != nil && apierrors.IsNotFound(err) {
+		// Define a new deployment
+		dep, err := r.deploymentForBenchmark(benchmark)
+		if err != nil {
+			log.Error(err, "Failed to define new Deployment resource for Benchmark")
+
+			// The following implementation will update the status
+			meta.SetStatusCondition(&benchmark.Status.Conditions, metav1.Condition{Type: typeAvailableBenchmark,
+				Status: metav1.ConditionFalse, Reason: "Reconciling",
+				Message: fmt.Sprintf("Failed to create Deployment for the custom resource (%s): (%s)", benchmark.Name, err)})
+
+			if err := r.Status().Update(ctx, benchmark); err != nil {
+				log.Error(err, "Failed to update Benchmark status")
+				return ctrl.Result{}, err
+			}
+
+			return ctrl.Result{}, err
+		}
+
+		log.Info("Creating a new Deployment",
+			"Deployment.Namespace", dep.Namespace, "Deployment.Name", dep.Name)
+		if err = r.Create(ctx, dep); err != nil {
+			log.Error(err, "Failed to create new Deployment",
+				"Deployment.Namespace", dep.Namespace, "Deployment.Name", dep.Name)
+			return ctrl.Result{}, err
+		}
+
+		// Deployment created successfully
+		// We will requeue the reconciliation so that we can ensure the state
+		// and move forward for the next operations
+		return ctrl.Result{RequeueAfter: time.Minute}, nil
+	} else if err != nil {
+		log.Error(err, "Failed to get Deployment")
+		// Let's return the error for the reconciliation be re-trigged again
+		return ctrl.Result{}, err
+	}
+
+	// The following implementation will update the status
+	meta.SetStatusCondition(&benchmark.Status.Conditions, metav1.Condition{Type: typeAvailableBenchmark,
+		Status: metav1.ConditionTrue, Reason: "Reconciling",
+		Message: fmt.Sprintf("Deployment for custom resource (%s) created successfully", benchmark.Name)})
+
+	if err := r.Status().Update(ctx, benchmark); err != nil {
+		log.Error(err, "Failed to update Benchmark status")
+		return ctrl.Result{}, err
+	}
+
+	return ctrl.Result{}, nil
+}
+
+// finalizeBenchmark will perform the required operations before delete the CR.
+func (r *BenchmarkReconciler) doFinalizerOperationsForBenchmark(cr *perfv1.Benchmark) {
+	// TODO(user): Add the cleanup steps that the operator
+	// needs to do before the CR can be deleted. Examples
+	// of finalizers include performing backups and deleting
+	// resources that are not owned by this CR, like a PVC.
+
+	// Note: It is not recommended to use finalizers with the purpose of delete resources which are
+	// created and managed in the reconciliation. These ones, such as the Deployment created on this reconcile,
+	// are defined as depended of the custom resource. See that we use the method ctrl.SetControllerReference.
+	// to set the ownerRef which means that the Deployment will be deleted by the Kubernetes API.
+	// More info: https://kubernetes.io/docs/tasks/administer-cluster/use-cascading-deletion/
+
+	// The following implementation will raise an event
+	r.Recorder.Event(cr, "Warning", "Deleting",
+		fmt.Sprintf("Custom Resource %s is being deleted from the namespace %s",
+			cr.Name,
+			cr.Namespace))
+}
+
+// deploymentForBenchmark returns a Benchmark Deployment object
+func (r *BenchmarkReconciler) deploymentForBenchmark(
+	benchmark *perfv1.Benchmark) (*appsv1.Deployment, error) {
+	ls := labelsForBenchmark(benchmark.Name)
+	replicas := int32(1)
+
+	// Get the Operand image
+	image := "quay.io/redhat-chaos/krkn-hub:power-outages"
+
+	dep := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      benchmark.Name,
+			Namespace: benchmark.Namespace,
+		},
+		Spec: appsv1.DeploymentSpec{
+			Replicas: &replicas,
+			Selector: &metav1.LabelSelector{
+				MatchLabels: ls,
+			},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: ls,
+				},
+				Spec: corev1.PodSpec{
+					// TODO(user): Uncomment the following code to configure the nodeAffinity expression
+					// according to the platforms which are supported by your solution. It is considered
+					// best practice to support multiple architectures. build your manager image using the
+					// makefile target docker-buildx. Also, you can use docker manifest inspect <image>
+					// to check what are the platforms supported.
+					// More info: https://kubernetes.io/docs/concepts/scheduling-eviction/assign-pod-node/#node-affinity
+					//Affinity: &corev1.Affinity{
+					//	NodeAffinity: &corev1.NodeAffinity{
+					//		RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
+					//			NodeSelectorTerms: []corev1.NodeSelectorTerm{
+					//				{
+					//					MatchExpressions: []corev1.NodeSelectorRequirement{
+					//						{
+					//							Key:      "kubernetes.io/arch",
+					//							Operator: "In",
+					//							Values:   []string{"amd64", "arm64", "ppc64le", "s390x"},
+					//						},
+					//						{
+					//							Key:      "kubernetes.io/os",
+					//							Operator: "In",
+					//							Values:   []string{"linux"},
+					//						},
+					//					},
+					//				},
+					//			},
+					//		},
+					//	},
+					//},
+					SecurityContext: &corev1.PodSecurityContext{
+						RunAsNonRoot: &[]bool{true}[0],
+						// IMPORTANT: seccomProfile was introduced with Kubernetes 1.19
+						// If you are looking for to produce solutions to be supported
+						// on lower versions you must remove this option.
+						SeccompProfile: &corev1.SeccompProfile{
+							Type: corev1.SeccompProfileTypeRuntimeDefault,
+						},
+					},
+					Containers: []corev1.Container{{
+						Image:           image,
+						Name:            "benchmark",
+						ImagePullPolicy: corev1.PullIfNotPresent,
+						// Ensure restrictive context for the container
+						// More info: https://kubernetes.io/docs/concepts/security/pod-security-standards/#restricted
+						SecurityContext: &corev1.SecurityContext{
+							// WARNING: Ensure that the image used defines an UserID in the Dockerfile
+							// otherwise the Pod will not run and will fail with "container has runAsNonRoot and image has non-numeric user"".
+							// If you want your workloads admitted in namespaces enforced with the restricted mode in OpenShift/OKD vendors
+							// then, you MUST ensure that the Dockerfile defines a User ID OR you MUST leave the "RunAsNonRoot" and
+							// "RunAsUser" fields empty.
+							RunAsNonRoot: &[]bool{true}[0],
+							// The benchmark image does not use a non-zero numeric user as the default user.
+							// Due to RunAsNonRoot field being set to true, we need to force the user in the
+							// container to a non-zero numeric user. We do this using the RunAsUser field.
+							// However, if you are looking to provide solution for K8s vendors like OpenShift
+							// be aware that you cannot run under its restricted-v2 SCC if you set this value.
+							RunAsUser:                &[]int64{1001}[0],
+							AllowPrivilegeEscalation: &[]bool{false}[0],
+							Capabilities: &corev1.Capabilities{
+								Drop: []corev1.Capability{
+									"ALL",
+								},
+							},
+						},
+						Command: []string{"commando", "-m=64", "-o", "modern", "-v"},
+					}},
+				},
+			},
+		},
+	}
+
+	// Set the ownerRef for the Deployment
+	// More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/owners-dependents/
+	if err := ctrl.SetControllerReference(benchmark, dep, r.Scheme); err != nil {
+		return nil, err
+	}
+	return dep, nil
+}
+
+// labelsForBechmark returns the labels for selecting the resources
+// More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/common-labels/
+func labelsForBenchmark(name string) map[string]string {
+	var imageTag string
+	image := "quay.io/redhat-chaos/krkn-hub:power-outages"
+	imageTag = strings.Split(image, ":")[1]
+	return map[string]string{"app.kubernetes.io/name": "Memcached",
+		"app.kubernetes.io/instance":   name,
+		"app.kubernetes.io/version":    imageTag,
+		"app.kubernetes.io/part-of":    "memcached-operator",
+		"app.kubernetes.io/created-by": "controller-manager",
+	}
 }
 
 // SetupWithManager sets up the controller with the Manager.
