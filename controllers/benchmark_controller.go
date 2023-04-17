@@ -32,7 +32,6 @@ import (
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	perfv1 "github.com/josecastillolema/krkn-operator/api/v1"
@@ -90,7 +89,7 @@ func (r *BenchmarkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		if apierrors.IsNotFound(err) {
 			// If the custom resource is not found then, it usually means that it was deleted or not created
 			// In this way, we will stop the reconciliation
-			log.Info("Baseline resource not found. Ignoring since object must be deleted")
+			log.Info("Benchmark resource not found. Ignoring since object must be deleted")
 			return ctrl.Result{}, nil
 		}
 		// Error reading the object - requeue the request.
@@ -115,79 +114,6 @@ func (r *BenchmarkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			log.Error(err, "Failed to re-fetch benchmark")
 			return ctrl.Result{}, err
 		}
-	}
-
-	// Let's add a finalizer. Then, we can define some operations which should
-	// occurs before the custom resource to be deleted.
-	// More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/finalizers
-	if !controllerutil.ContainsFinalizer(benchmark, benchmarkFinalizer) {
-		log.Info("Adding Finalizer for Benchmark")
-		if ok := controllerutil.AddFinalizer(benchmark, benchmarkFinalizer); !ok {
-			log.Error(err, "Failed to add finalizer into the custom resource")
-			return ctrl.Result{Requeue: true}, nil
-		}
-
-		if err = r.Update(ctx, benchmark); err != nil {
-			log.Error(err, "Failed to update custom resource to add finalizer")
-			return ctrl.Result{}, err
-		}
-	}
-
-	// Check if the Benchmark instance is marked to be deleted, which is
-	// indicated by the deletion timestamp being set.
-	isBenchmarkMarkedToBeDeleted := benchmark.GetDeletionTimestamp() != nil
-	if isBenchmarkMarkedToBeDeleted {
-		if controllerutil.ContainsFinalizer(benchmark, benchmarkFinalizer) {
-			log.Info("Performing Finalizer Operations for Benchmark before delete CR")
-
-			// Let's add here an status "Downgrade" to define that this resource begin its process to be terminated.
-			meta.SetStatusCondition(&benchmark.Status.Conditions, metav1.Condition{Type: typeDegradedBenchmark,
-				Status: metav1.ConditionUnknown, Reason: "Finalizing",
-				Message: fmt.Sprintf("Performing finalizer operations for the custom resource: %s ", benchmark.Name)})
-
-			if err := r.Status().Update(ctx, benchmark); err != nil {
-				log.Error(err, "Failed to update Benchmark status")
-				return ctrl.Result{}, err
-			}
-
-			// Perform all operations required before remove the finalizer and allow
-			// the Kubernetes API to remove the custom resource.
-			r.doFinalizerOperationsForBenchmark(benchmark)
-
-			// TODO(user): If you add operations to the doFinalizerOperationsForBenchmark method
-			// then you need to ensure that all worked fine before deleting and updating the Downgrade status
-			// otherwise, you should requeue here.
-
-			// Re-fetch the benchmark Custom Resource before update the status
-			// so that we have the latest state of the resource on the cluster and we will avoid
-			// raise the issue "the object has been modified, please apply
-			// your changes to the latest version and try again" which would re-trigger the reconciliation
-			if err := r.Get(ctx, req.NamespacedName, benchmark); err != nil {
-				log.Error(err, "Failed to re-fetch benchmark")
-				return ctrl.Result{}, err
-			}
-
-			meta.SetStatusCondition(&benchmark.Status.Conditions, metav1.Condition{Type: typeDegradedBenchmark,
-				Status: metav1.ConditionTrue, Reason: "Finalizing",
-				Message: fmt.Sprintf("Finalizer operations for custom resource %s name were successfully accomplished", benchmark.Name)})
-
-			if err := r.Status().Update(ctx, benchmark); err != nil {
-				log.Error(err, "Failed to update Benchmark status")
-				return ctrl.Result{}, err
-			}
-
-			log.Info("Removing Finalizer for Benchmark after successfully perform the operations")
-			if ok := controllerutil.RemoveFinalizer(benchmark, benchmarkFinalizer); !ok {
-				log.Error(err, "Failed to remove finalizer for Benchmark")
-				return ctrl.Result{Requeue: true}, nil
-			}
-
-			if err := r.Update(ctx, benchmark); err != nil {
-				log.Error(err, "Failed to remove finalizer for Benchmark")
-				return ctrl.Result{}, err
-			}
-		}
-		return ctrl.Result{}, nil
 	}
 
 	// Check if the deployment already exists, if not create a new one
@@ -241,26 +167,6 @@ func (r *BenchmarkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	}
 
 	return ctrl.Result{}, nil
-}
-
-// finalizeBenchmark will perform the required operations before delete the CR.
-func (r *BenchmarkReconciler) doFinalizerOperationsForBenchmark(cr *perfv1.Benchmark) {
-	// TODO(user): Add the cleanup steps that the operator
-	// needs to do before the CR can be deleted. Examples
-	// of finalizers include performing backups and deleting
-	// resources that are not owned by this CR, like a PVC.
-
-	// Note: It is not recommended to use finalizers with the purpose of delete resources which are
-	// created and managed in the reconciliation. These ones, such as the Deployment created on this reconcile,
-	// are defined as depended of the custom resource. See that we use the method ctrl.SetControllerReference.
-	// to set the ownerRef which means that the Deployment will be deleted by the Kubernetes API.
-	// More info: https://kubernetes.io/docs/tasks/administer-cluster/use-cascading-deletion/
-
-	// The following implementation will raise an event
-	r.Recorder.Event(cr, "Warning", "Deleting",
-		fmt.Sprintf("Custom Resource %s is being deleted from the namespace %s",
-			cr.Name,
-			cr.Namespace))
 }
 
 // deploymentForBenchmark returns a Benchmark Deployment object
@@ -350,7 +256,6 @@ func (r *BenchmarkReconciler) deploymentForBenchmark(
 								},
 							},
 						},
-						Command: []string{"commando", "-m=64", "-o", "modern", "-v"},
 					}},
 				},
 			},
