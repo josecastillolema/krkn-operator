@@ -49,7 +49,7 @@ krkn-operator-controller-manager-b8585c7cb-88xjh   2/2     Running   0          
 3. Install instances of Custom Resources:
 
 ```sh
-kubectl apply -f config/samples/
+kubectl apply -f config/samples/perf_v1_benchmark.yaml
 ```
 
 ### Uninstall CRDs
