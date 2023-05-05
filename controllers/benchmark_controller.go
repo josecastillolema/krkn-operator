@@ -19,7 +19,6 @@ package controllers
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -37,7 +36,7 @@ import (
 	perfv1 "github.com/josecastillolema/krkn-operator/api/v1"
 )
 
-const benchmarkFinalizer = "perf.chaos.io/finalizer"
+const image = "quay.io/redhat-chaos/krkn-hub"
 
 // Definitions to manage status conditions
 const (
@@ -176,7 +175,7 @@ func (r *BenchmarkReconciler) deploymentForBenchmark(
 	replicas := int32(1)
 
 	// Get the Operand image
-	image := "quay.io/redhat-chaos/krkn-hub:power-outages"
+	image := image + ":" + benchmark.Spec.Scenario
 
 	dep := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
@@ -231,8 +230,14 @@ func (r *BenchmarkReconciler) deploymentForBenchmark(
 						},
 					},
 					Containers: []corev1.Container{{
-						Image:           image,
-						Name:            "benchmark",
+						Image: image,
+						Name:  "benchmark",
+						Env: []corev1.EnvVar{
+							{
+								Name:  "MYSQL_ROOT_PASSWORD",
+								Value: "olar",
+							},
+						},
 						ImagePullPolicy: corev1.PullIfNotPresent,
 						// Ensure restrictive context for the container
 						// More info: https://kubernetes.io/docs/concepts/security/pod-security-standards/#restricted
@@ -273,13 +278,9 @@ func (r *BenchmarkReconciler) deploymentForBenchmark(
 // labelsForBechmark returns the labels for selecting the resources
 // More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/common-labels/
 func labelsForBenchmark(name string) map[string]string {
-	var imageTag string
-	image := "quay.io/redhat-chaos/krkn-hub:power-outages"
-	imageTag = strings.Split(image, ":")[1]
-	return map[string]string{"app.kubernetes.io/name": "Memcached",
+	return map[string]string{"app.kubernetes.io/name": "Benchmark",
 		"app.kubernetes.io/instance":   name,
-		"app.kubernetes.io/version":    imageTag,
-		"app.kubernetes.io/part-of":    "memcached-operator",
+		"app.kubernetes.io/part-of":    "krkn-operator",
 		"app.kubernetes.io/created-by": "controller-manager",
 	}
 }
